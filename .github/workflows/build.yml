@@ -1,0 +1,20 @@
+name: emcmake
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+    - uses: mymindstorm/setup-emsdk@v14
+    - name: configure
+      run: emcmake -B build-emcmake . -DCMAKE_BUILD_TYPE=Release
+    - name: build
+      run: cmake --build build-emcmake
