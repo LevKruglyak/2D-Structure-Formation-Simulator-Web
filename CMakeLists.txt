@@ -15,9 +15,9 @@ FetchContent_Declare(imgui_bundle GIT_REPOSITORY https://github.com/pthom/imgui_
 FetchContent_MakeAvailable(imgui_bundle)
 
 # muFFT library
-add_subdirectory(muFFT)
+add_subdirectory(fft)
 list(APPEND LIBRARIES muFFT)
-list(APPEND INCLUDES muFFT)
+list(APPEND INCLUDES fft)
 
 # glm library
 FetchContent_Declare(glm GIT_REPOSITORY https://github.com/g-truc/glm.git GIT_TAG 1.0.1)
