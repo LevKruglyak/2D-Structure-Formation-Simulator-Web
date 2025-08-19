@@ -6,6 +6,7 @@
 #include "fft_internal.h"
 #include <cstddef>
 #include <functional>
+#include <iostream>
 #include <vector>
 
 class Simulation {
@@ -34,7 +35,7 @@ public:
     int PERLIN_NOISE_OCTAVES = 4;  // Initial Perlin noise octaves
     float PARTICLES_PER_CELL = 20; // Total number of particles
     bool USE_SCALE_FACTOR = true;
-    ptrdiff_t RESOLUTION = 1024; // Resolution for density texture
+    ptrdiff_t RESOLUTION = 256; // Resolution for density texture
   };
 
   Params params;
@@ -45,22 +46,25 @@ public:
 
   std::vector<float> rho; // density field
 
-  cfloat *scratch_k = nullptr; // Fourier scratch space
-  cfloat *xgrad = nullptr;     // gradient of potential (x-axis)
-  cfloat *ygrad = nullptr;     // gradient of potential (y-axis)
+  cfloat *density_x = nullptr; // Fourier scratch space
+  cfloat *density_k = nullptr; // Fourier scratch space
+  cfloat *xgrad_x = nullptr;   // gradient of potential (x-axis)
+  cfloat *ygrad_x = nullptr;   // gradient of potential (y-axis)
+  cfloat *xgrad_k = nullptr;   // gradient of potential (x-axis)
+  cfloat *ygrad_k = nullptr;   // gradient of potential (y-axis)
   mufft_plan_2d *fplan = nullptr;
   mufft_plan_2d *bxplan = nullptr;
   mufft_plan_2d *byplan = nullptr;
 
   std::vector<vec2> ff; // force field
 
-  double a = 1.0;    // scale factor
-  double H = 0.0;    // scale factor
-  double adot = 0.0; // scale factor time derivative
-  double rho0 = 0.0; // mean density at a=1
+  float a = 1.0;    // scale factor
+  float H = 0.0;    // scale factor
+  float adot = 0.0; // scale factor time derivative
+  float rho0 = 0.0; // mean density at a=1
 
-  double t = 0.0;
-  double dt = 0.0;
+  float t = 0.0;
+  float dt = 0.0;
 
   int N = 0;
 
@@ -80,9 +84,12 @@ public:
     adot = std::sqrt(8.0 * M_PI * params.GRAVITY * rho0);
     H = adot / a;
 
-    scratch_k = (cfloat *)mufft_alloc(Nx * Ny * sizeof(cfloat));
-    xgrad = (cfloat *)mufft_alloc(Nx * Ny * sizeof(cfloat));
-    ygrad = (cfloat *)mufft_alloc(Nx * Ny * sizeof(cfloat));
+    density_k = (cfloat *)mufft_alloc(Nx * Ny * sizeof(cfloat));
+    density_x = (cfloat *)mufft_alloc(Nx * Ny * sizeof(cfloat));
+    xgrad_x = (cfloat *)mufft_alloc(Nx * Ny * sizeof(cfloat));
+    ygrad_x = (cfloat *)mufft_alloc(Nx * Ny * sizeof(cfloat));
+    xgrad_k = (cfloat *)mufft_alloc(Nx * Ny * sizeof(cfloat));
+    ygrad_k = (cfloat *)mufft_alloc(Nx * Ny * sizeof(cfloat));
 
     fplan = mufft_create_plan_2d_c2c(Nx, Ny, MUFFT_FORWARD, MUFFT_FLAG_CPU_ANY);
     bxplan =
@@ -117,9 +124,12 @@ public:
   }
 
   ~Simulation() {
-    mufft_free(xgrad);
-    mufft_free(ygrad);
-    mufft_free(scratch_k);
+    mufft_free(xgrad_x);
+    mufft_free(ygrad_x);
+    mufft_free(xgrad_k);
+    mufft_free(ygrad_k);
+    mufft_free(density_x);
+    mufft_free(density_k);
     mufft_free_plan_2d(fplan);
     mufft_free_plan_2d(bxplan);
     mufft_free_plan_2d(byplan);
@@ -130,7 +140,6 @@ private:
   void assign_masses();
   void compute_forces();
   void update_positions();
-  void gather_profile();
 
   vec2 cic_force(vec2 p);
 };

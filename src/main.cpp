@@ -1,43 +1,39 @@
 #include "immapp/immapp.h"
-#include "implot/implot.h"
+#include "immvision/image.h"
+#include "immvision/immvision.h"
+#include "immvision/inspector.h"
 #include "simulation.h"
+
+#include <opencv2/core.hpp>
+#include <opencv2/imgcodecs.hpp>
+#include <opencv2/imgproc.hpp>
 
 class SimulationCached : public Simulation {
 public:
-  SimulationCached(Params params) : Simulation(params) {}
+  SimulationCached(Params params) : Simulation(params) {
+    ImmVision::Inspector_ClearImages();
+    take_snapshot();
+  }
+
+  void take_snapshot() {
+    ImmVision::Inspector_AddImage(
+        cv::Mat(params.RESOLUTION, params.RESOLUTION, CV_32FC1, rho.data()),
+        "density_" + std::to_string(t), "zk", "densityColor");
+  }
+
+  ImmVision::ImageParams imageParams;
 };
 
 class App {
   bool busy = false;
+  int iterations_left = 0;
   double progress = 0.0;
   std::unique_ptr<SimulationCached> simulation = nullptr;
   Simulation::Params params;
 
   void viewport_gui() {
     ImGui::Begin("Viewport");
-    if (ImPlot::BeginPlot("Viewport", ImVec2(-1.0, -1.0),
-                          ImPlotFlags_Equal | ImPlotFlags_NoTitle |
-                              ImPlotFlags_NoLegend)) {
-      ImPlot::SetupAxes("", "");
-      float r = params.RADIUS;
-      if (simulation != nullptr) {
-        // ImPlot::PlotImage("density", simulation->densityTexture,
-        //                   ImPlotPoint(0, 0), ImPlotPoint(r, r));
-      }
-
-      ImPlot::PushPlotClipRect();
-      // Draw the bounds
-      ImDrawList *draw_list = ImPlot::GetPlotDrawList();
-      ImVec2 p_min = ImPlot::PlotToPixels(ImPlotPoint(0, 0));
-      ImVec2 p_max = ImPlot::PlotToPixels(ImPlotPoint(r, r));
-      ImU32 col = ImGui::ColorConvertFloat4ToU32(
-          ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
-
-      draw_list->AddRect(p_min, p_max, col, 0.0f, 0, 2.0f);
-      ImPlot::PopPlotClipRect();
-
-      ImPlot::EndPlot();
-    }
+    ImmVision::Inspector_Show();
     ImGui::End();
   }
 
@@ -111,11 +107,18 @@ class App {
     ImGui::BeginDisabled(busy);
     if (ImGui::Button("Advance")) {
       busy = true;
-      // advance timestep
-      for (int i = 0; i < num_iterations; i++) {
-        simulation->timestep();
+      iterations_left = num_iterations - 1;
+      simulation->timestep();
+    }
+
+    if (busy && iterations_left > 0) {
+      iterations_left--;
+      simulation->timestep();
+
+      if (iterations_left == 0) {
+        busy = false;
+        simulation->take_snapshot();
       }
-      busy = false;
     }
 
     ImGui::PushItemWidth(80);
