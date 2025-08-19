@@ -1,20 +1,69 @@
-name: emcmake
+name: Build & Deploy (emcmake → GitHub Pages)
 
 on:
   push:
-    branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: true
 
 jobs:
   build:
-
     runs-on: ubuntu-latest
-
     steps:
-    - uses: actions/checkout@v4
-    - uses: mymindstorm/setup-emsdk@v14
-    - name: configure
-      run: emcmake cmake -B build-emcmake . -DCMAKE_BUILD_TYPE=Release
-    - name: build
-      run: cmake --build build-emcmake
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Emscripten
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: 3.1.61
+
+      - name: Show tool versions
+        run: |
+          emcc -v
+          emcmake cmake --version
+
+      - name: Configure (CMake)
+        run: |
+          emcmake cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --config Release -j
+
+      - name: Prepare site
+        run: |
+          # Optional: ensure an index.html exists if your output is named differently
+          # If your HTML is named 'myapp.html' and you want it to serve as index:
+          if [ -f build/structure-formation.html ] && [ ! -f build/index.html ]; then
+            cp build/structure-formation.html build/index.html
+          fi
+          touch build/.nojekyll
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: build
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
