@@ -1,27 +1,56 @@
+#include "colors.h"
+#include "hello_imgui/hello_imgui_include_opengl.h"
+#include "hello_imgui/imgui_theme.h"
 #include "immapp/immapp.h"
-#include "immvision/image.h"
-#include "immvision/immvision.h"
-#include "immvision/inspector.h"
+#include "implot/implot.h"
+#include "implot/implot_internal.h"
 #include "simulation.h"
-
-#include <opencv2/core.hpp>
-#include <opencv2/imgcodecs.hpp>
-#include <opencv2/imgproc.hpp>
 
 class SimulationCached : public Simulation {
 public:
-  SimulationCached(Params params) : Simulation(params) {
-    ImmVision::Inspector_ClearImages();
-    take_snapshot();
+  SimulationCached(Params params) : Simulation(params) { init_textures(); }
+
+  glm::fvec3 density_hdr(float input) {
+    input *= params.RADIUS * params.RADIUS / params.MASS;
+    static constexpr std::array<glm::fvec3, 256> lut = makeCosmicLUT();
+    return mapHDRtoColor(1.0 - exp(-0.4 * input), 1.0, lut);
   }
 
-  void take_snapshot() {
-    ImmVision::Inspector_AddImage(
-        cv::Mat(params.RESOLUTION, params.RESOLUTION, CV_32FC1, rho.data()),
-        "density_" + std::to_string(t), "zk", "densityColor");
+  void load_textures() {
+    densityTextureData.reserve(params.RESOLUTION * params.RESOLUTION * 3);
+#pragma omp parallel for collapse(2)
+    for (int i = 0; i < params.RESOLUTION; i++) {
+      for (int j = 0; j < params.RESOLUTION; j++) {
+        glm::fvec3 col = density_hdr(rho[i * params.RESOLUTION + j]);
+        densityTextureData[(i * params.RESOLUTION + j) * 3 + 0] = col.x;
+        densityTextureData[(i * params.RESOLUTION + j) * 3 + 1] = col.y;
+        densityTextureData[(i * params.RESOLUTION + j) * 3 + 2] = col.z;
+      }
+    }
   }
 
-  ImmVision::ImageParams imageParams;
+  void init_textures() {
+    load_textures();
+
+    glGenTextures(1, &densityTexture);
+    glBindTexture(GL_TEXTURE_2D, densityTexture);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB32F, params.RESOLUTION,
+                 params.RESOLUTION, 0, GL_RGB, GL_FLOAT,
+                 densityTextureData.data());
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+  }
+
+  void sync_textures() {
+    load_textures();
+
+    glBindTexture(GL_TEXTURE_2D, densityTexture);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, Nx, Ny, GL_RGB, GL_FLOAT,
+                    densityTextureData.data());
+  }
+
+  GLuint densityTexture;
+  std::vector<float> densityTextureData;
 };
 
 class App {
@@ -33,7 +62,31 @@ class App {
 
   void viewport_gui() {
     ImGui::Begin("Viewport");
-    ImmVision::Inspector_Show();
+    // ImmVision::Inspector_Show();
+    //
+    if (ImPlot::BeginPlot("Viewport", ImVec2(-1.0, -1.0),
+                          ImPlotFlags_Equal | ImPlotFlags_NoTitle |
+                              ImPlotFlags_NoLegend)) {
+      ImPlot::SetupAxes("", "");
+      float r = params.RADIUS;
+      if (simulation != nullptr) {
+        ImPlot::PlotImage("density", simulation->densityTexture,
+                          ImPlotPoint(0, 0), ImPlotPoint(r, r));
+      }
+
+      ImPlot::PushPlotClipRect();
+      // Draw the bounds
+      ImDrawList *draw_list = ImPlot::GetPlotDrawList();
+      ImVec2 p_min = ImPlot::PlotToPixels(ImPlotPoint(0, 0));
+      ImVec2 p_max = ImPlot::PlotToPixels(ImPlotPoint(r, r));
+      ImU32 col = ImGui::ColorConvertFloat4ToU32(
+          ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+
+      draw_list->AddRect(p_min, p_max, col, 0.0f, 0, 2.0f);
+      ImPlot::PopPlotClipRect();
+
+      ImPlot::EndPlot();
+    }
     ImGui::End();
   }
 
@@ -107,8 +160,7 @@ class App {
     ImGui::BeginDisabled(busy);
     if (ImGui::Button("Advance")) {
       busy = true;
-      iterations_left = num_iterations - 1;
-      simulation->timestep();
+      iterations_left = num_iterations;
     }
 
     if (busy && iterations_left > 0) {
@@ -116,8 +168,8 @@ class App {
       simulation->timestep();
 
       if (iterations_left == 0) {
+        simulation->sync_textures();
         busy = false;
-        simulation->take_snapshot();
       }
     }
 
@@ -150,7 +202,25 @@ public:
   void init() {}
 
   void gui() {
-    ImGui::DockSpaceOverViewport(ImGui::GetMainViewport()->ID);
+    ImGuiID dockspace_id =
+        ImGui::DockSpaceOverViewport(ImGui::GetMainViewport()->ID);
+
+    static bool built = false;
+    if (!built) {
+      built = true;
+
+      ImGui::DockBuilderRemoveNode(dockspace_id);
+      ImGui::DockBuilderAddNode(dockspace_id, ImGuiDockNodeFlags_DockSpace);
+      ImGui::DockBuilderSetNodeSize(dockspace_id,
+                                    ImGui::GetMainViewport()->Size);
+
+      ImGuiID left = 0, right = 0;
+      ImGui::DockBuilderSplitNode(dockspace_id, ImGuiDir_Left, 0.65f, &left,
+                                  &right);
+      ImGui::DockBuilderDockWindow("Viewport", left);
+      ImGui::DockBuilderDockWindow("Settings", right);
+      ImGui::DockBuilderFinish(dockspace_id);
+    }
 
     viewport_gui();
     simulation_params_gui();
@@ -162,10 +232,12 @@ void default_layout();
 int main(int, char *[]) {
   std::unique_ptr<App> app = std::make_unique<App>();
   HelloImGui::RunnerParams params;
-  params.appWindowParams.windowTitle = "Structure Formation";
+  params.appWindowParams.windowTitle = "2D Structure Formation";
   params.imGuiWindowParams.menuAppTitle = "Main";
   params.appWindowParams.windowGeometry.size = {1920, 1080};
   params.imGuiWindowParams.showMenuBar = true;
+  params.imGuiWindowParams.tweakedTheme =
+      ImGuiTheme::ImGuiTheme_FromName("PhotoshopStyle");
   params.imGuiWindowParams.showStatusBar = false;
   params.imGuiWindowParams.defaultImGuiWindowType =
       HelloImGui::DefaultImGuiWindowType::ProvideFullScreenDockSpace;
@@ -173,11 +245,8 @@ int main(int, char *[]) {
   params.callbacks.PostInit = [&app]() { app->init(); };
   params.callbacks.ShowGui = [&app]() { app->gui(); };
   params.callbacks.BeforeExit = [&app]() { app = nullptr; };
-  default_layout();
 
   ImmApp::AddOnsParams addons;
   addons.withImplot = true;
   ImmApp::Run(params, addons);
 }
-
-void default_layout() {}
